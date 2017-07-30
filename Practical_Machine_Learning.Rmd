@@ -1,0 +1,164 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Vital"
+date: "July 26, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(randomForest)
+library(knitr)
+library(glmnet)
+library(kernlab)
+library(klaR)
+library(C50)
+library(ipred)
+library(gbm)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Summary
+
+In this article we will create model for a predicting classes of Weight Lifting Exercises.
+After analysis 2 ML algorithms were chosen: c50 and rf.
+As outcome - same predictions for a testing set.
+main phases:
+- Load and clean dataset;
+- Algorithm Spot Check;
+- Error measuremen;
+- Accuracy plots;
+- Prediction.
+
+## 1. Load and clean dataset
+
+       Load data. Remove insignificant values. Remove data with more than 70 % of NA.
+
+```{r load data}
+#read data
+training <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+testing <-  read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!",""))
+nzv <- nearZeroVar(training, saveMetrics=TRUE)
+training <- training[,nzv$nzv==FALSE]
+nzv <- nearZeroVar(testing, saveMetrics=TRUE)
+testing <- testing[,nzv$nzv==FALSE]
+rm(nzv)
+#remove columns with more then 70 % of NA
+trainingTMP <- training
+for(i in 1:length(training)) {
+    if( sum( is.na( training[, i] ) ) /nrow(training) >= .7) {
+        for(j in 1:length(trainingTMP)) {
+            if( length( grep(names(training[i]), names(trainingTMP)[j]) ) == 1)  {
+                trainingTMP <- trainingTMP[ , -j]
+            }   
+        } 
+    }
+}
+# Set back to the original variable name
+training <- trainingTMP
+rm(trainingTMP)
+
+# remove unnecessary rows
+training <- training[,c(3:4,6:length(training))]
+testing <- testing[,c(3:4,6: (length(testing) -1) )]
+```
+
+## 2. Algorithm Spot Check 
+
+       Let's use spot check with repeatedcv mode to distinguish algorithm with best accuracy.
+
+```{r Algorithm Spot Check, cache=TRUE}
+
+control <- trainControl(method="repeatedcv", number=7, repeats=2)
+metric <- "Accuracy"
+seed <- 7
+# Linear Discriminant Analysis
+set.seed(seed)
+fit.lda <- train(classe~., data=training, method="lda", metric=metric, preProc=c("center", "scale"), trControl=control)
+# SVM Radial
+set.seed(seed)
+fit.svmRadial <- train(classe~., data=training, method="svmRadial", metric=metric, preProc=c("center", "scale"), trControl=control, fit=FALSE)
+# kNN
+set.seed(seed)
+fit.knn <- train(classe~., data=training, method="knn", metric=metric, preProc=c("center", "scale"), trControl=control)
+# CART
+set.seed(seed)
+fit.cart <- train(classe~., data=training, method="rpart", metric=metric, trControl=control)
+# C5.0
+set.seed(seed)
+fit.c50 <- train(classe~., data=training, method="C5.0", metric=metric, trControl=control)
+# Bagged CART
+set.seed(seed)
+fit.treebag <- train(classe~., data=training, method="treebag", metric=metric, trControl=control)
+# Random Forest
+set.seed(seed)
+fit.rf <- train(classe~., data=training, method="rf", metric=metric, trControl=control)
+results <- resamples(list(lda=fit.lda,
+	svm=fit.svmRadial, knn=fit.knn, cart=fit.cart, c50=fit.c50,
+	bagging=fit.treebag, rf=fit.rf))
+# Table comparison
+summary(results)
+bwplot(results)
+```
+
+## 3. Error measurement 
+
+       We can see that random forest have the best accuracy. Although C50 is good too. 
+       Let's use both models and calculate error for C50.
+
+```{r error measurement}
+print(fit.rf, digits = 3)
+print(fit.c50, digits = 3)
+```
+       
+       In sample error rate is 0.1%
+
+```{r error measurement 2, cache=TRUE}
+# predict on testValidateData
+trainValidateData <- createDataPartition(y = training$classe, p = 0.7, list = FALSE)
+trainData <- training[trainValidateData, ]
+testData <- training[-trainValidateData, ]
+
+control <- trainControl(method="repeatedcv", number=7, repeats=2)
+metric <- "Accuracy"
+seed <- 7
+set.seed(seed)
+fit.c50.out <- train(classe~., data=trainData, method="C5.0", metric=metric, trControl=control)
+predictions <- predict(fit.c50.out, testData)
+# length of the predictions
+outOfSampleError.accuracy <- sum(predictions == testData$classe)/length(predictions)
+outOfSampleError.accuracy
+
+```
+```{r out of sample error, cache=TRUE}
+outOfSampleError <- 1 - outOfSampleError.accuracy
+outOfSampleError
+e <- outOfSampleError * 100
+paste0("Out of sample error estimation: ", round(e, digits = 4), "%")
+```
+
+## 4. Accuracy plots 
+
+```{r Accuracy plots}
+par(mfrow=c(1,2))
+plot(fit.rf, log = "y", lwd = 2, main = "Random forest accuracy", xlab = "Predictors", 
+    ylab = "Accuracy")
+plot(fit.c50, log = "y", lwd = 2, main = "C50 accuracy", xlab = "Predictors", 
+    ylab = "Accuracy")
+```
+
+## 5. Prediction 
+
+We will use c50 and rf to see if prediction for test dataset is correct.
+
+```{r prediction, echo = TRUE}
+rf.predict <- predict(fit.rf, testing)
+print(rf.predict)
+c50.predict <- predict(fit.c50, testing)
+print(c50.predict)
+print(rf.predict == c50.predict)
+```
